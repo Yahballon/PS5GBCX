@@ -6,7 +6,13 @@ import json
 import zipfile
 
 root = Path(__file__).resolve().parents[2]
-package = root / "gba/build-shelf/GBCXY-v2.0.0-by-YAHBALLON.zip"
+meta = json.loads((root / "app.json").read_text())
+assert meta["titleId"] == "PPSA99210", "wrong title ID"
+package = root / "gbc" / "build-shelf" / (
+    f'GBCXY-v{meta["version"]}-by-YAHBALLON.zip'
+)
+if not package.is_file():
+    raise FileNotFoundError(f"Signed GBCXY installer not found: {package}")
 required = {
     "PPSA99210/eboot.bin",
     "PPSA99210/sce_sys/param.json",

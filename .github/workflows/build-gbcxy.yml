@@ -130,6 +130,7 @@ jobs:
           set -euo pipefail
           python3 gbc/tools/verify_package.py
           cp gbc/build-shelf/GBCXY-v2.0.0-by-YAHBALLON.zip gbc/build-shelf/PPSA99210.zip
+          python3 gbc/tools/check_release.py --package gbc/build-shelf/PPSA99210.zip
           cd gbc/build-shelf
           sha256sum PPSA99210.zip > PPSA99210.zip.sha256
           unzip -tq PPSA99210.zip

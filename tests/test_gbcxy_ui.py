@@ -28,4 +28,8 @@ for helper in ('build_generated_psbc.py','build_agc_imports.py'):
     helper_text=(root/'gbc/tools'/helper).read_text()
     assert '"gba/build-shelf' not in helper_text,helper
     assert '"gbc/build-shelf' in helper_text,helper
+verify=(root/'gbc/tools/verify_package.py').read_text()
+assert 'root / "gba/build-shelf' not in verify
+assert 'root / "gbc" / "build-shelf"' in verify
+assert 'meta["version"]' in verify
 print("PASS: GBCXY themes, correct GB/GBC covers, GB core, SDK archives and native exit")
