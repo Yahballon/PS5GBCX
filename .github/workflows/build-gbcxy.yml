@@ -1,0 +1,165 @@
+# (AI-assisted) Native PS5GBC build, check and release using GitHub-hosted Ubuntu.
+name: GBCXY Native Build & Release
+
+on:
+  push:
+    branches: [main, feature/gbcxy-v2.0.0]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish verified ZIP as a GitHub release'
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gbcxy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: GB/GBC ROM source regression
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source release hygiene
+        run: python3 gbc/tools/check_release.py
+      - name: Validate GB/GBC covers, themes and native exit
+        run: |
+          python3 tests/test_gbcxy_ui.py
+          python3 -m py_compile gbc/tools/build_shelf.py
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -Ips5/frontend tests/test_gbcxy_cover_geometry.cpp -o /tmp/gbcxy-geometry
+          /tmp/gbcxy-geometry
+      - name: Validate build scripts
+        run: |
+          bash -n gbc/tools/bootstrap_native.sh gbc/tools/bootstrap_ci.sh gbc/tools/setup-pacbrew-dependencies.sh gbc/tools/build.sh
+          python3 -m py_compile gbc/tools/build_shelf.py gbc/tools/verify_package.py gbc/tools/build_generated_psbc.py gbc/tools/build_agc_imports.py
+
+  native:
+    name: Build signed PS5 eboot and installable ZIP
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    env:
+      PS5GBC_DEPS: ${{ github.workspace }}/.cache/ps5-build
+      PS5_VULKAN_DIR: ${{ github.workspace }}/.cache/ps5-build/PS5_Vulkan
+      PS5_PAYLOAD_SDK: ${{ github.workspace }}/.cache/ps5-build/PS5_Vulkan/.deps/native/ps5-payload-sdk
+      LIBNFS_PREFIX: ${{ github.workspace }}/.cache/ps5-build/libnfs-install
+      LIBZ_PREFIX: ${{ github.workspace }}/gbc/.deps/pacbrew/v0.40.2/sysroot/user/homebrew
+      PS5_CLANG: clang-18
+      BUILD_JOBS: '4'
+      USE_CCACHE: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PS5 LLVM 18, Mesa and cross-build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git ca-certificates curl wget tar unzip zip rsync build-essential make \
+            clang-18 lld-18 llvm-18 llvm-18-dev llvm-18-tools \
+            cmake ninja-build pkg-config meson glslang-tools \
+            bison flex zstd libzstd-dev libssl-dev zlib1g-dev \
+            libx11-dev libgl1-mesa-dev libclc-18 \
+            python3 python3-venv python3-dev python3-mako python3-numpy python3-pil
+          echo '/usr/lib/llvm-18/bin' >> "$GITHUB_PATH"
+          python3 -m venv --system-site-packages "$RUNNER_TEMP/ps5gba-tools"
+          "$RUNNER_TEMP/ps5gba-tools/bin/python" -m pip install --disable-pip-version-check 'meson==1.9.2'
+          echo "$RUNNER_TEMP/ps5gba-tools/bin" >> "$GITHUB_PATH"
+          clang-18 --version
+          meson --version
+      - name: Prepare pinned original Porpoise fonts, buttons and sounds
+        shell: bash
+        run: |
+          set -euo pipefail
+          rev=2ed1ab5a06995aa198f7bccd4da0f90c3fc29d39
+          root=ps5/porpoise_original/assets
+          mkdir -p "$root/fonts" "$root/brand" "$root/ui" "$root/sounds" ps5/frontend/assets/porpoise ps5/frontend/assets/sounds
+          for spec in \
+            'fonts/Nunito-Regular.ttf 2f4a2f8467657c1f039800f7af0f85d719d92bf6' \
+            'fonts/Nunito-SemiBold.ttf 2588d394a7b5773e8355c1d923877bef338f2adf' \
+            'fonts/Nunito-Bold.ttf c642a28adb3b5b89bc37dca9b76b81fa114c022b' \
+            'fonts/Nunito-ExtraBold.ttf 5dab2fd42d061b7f69ecbee7ac3f73d50053978c' \
+            'fonts/NotoSansJP-Porpoise.ttf e18162d7dd500a08d301b91949c6aa9a0c94907e' \
+            'brand/dolphin-mask.png bd51e74f7e11c79de9d40d626d3685038cf5d792' \
+            'ui/buttons.png 43902f0bccdab08fb74efb0a99ae3f282299543a' \
+            'sounds/game-row.wav d10d7d6ef5f8cb7343539e8aafb57fcb49f90a0f' \
+            'sounds/menu-scroll.wav abab02c03a9a8181f3c81ad6d027de6b9940213a'; do
+            read -r name expected <<< "$spec"
+            curl -fL --retry 5 --retry-all-errors --connect-timeout 20 \
+              "https://raw.githubusercontent.com/elripalda/Porpoise-Dolphin-Emulator-for-PS5/$rev/assets/$name" -o "$root/$name"
+            test "$(git hash-object "$root/$name")" = "$expected"
+          done
+          cp -R "$root/fonts" "$root/ui" ps5/frontend/assets/porpoise/
+          cp "$root/sounds/"*.wav ps5/frontend/assets/sounds/
+          mkdir -p ps5/porpoise_original/src/stb
+          cp ps5/frontend/third_party/stb_image.h ps5/porpoise_original/src/stb/stb_image.h
+          cp ps5/frontend/third_party/stb_truetype.h ps5/porpoise_original/src/stb/stb_truetype.h
+          python3 ps5/porpoise_original/tools/rebuild_shader.py
+          test -s ps5/porpoise_original/src/ui_frag.inc
+      - name: Prepare pinned Vulkan, payload SDK, libnfs and PacBrew
+        timeout-minutes: 305
+        run: bash gbc/tools/bootstrap_ci.sh
+      - name: Restore pinned previously released GB/GBC title helper
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release download v.1.0.0.1 --repo Yahballon/PS5GBCX \
+            --pattern 'PPSA99210.zip' --dir "$RUNNER_TEMP"
+          echo 'c81d9a1f9ec5d57a816a256caee6f3a5bc73cb7ffd4d2aae3e2d39cfadc02f2e  '"$RUNNER_TEMP/PPSA99210.zip" | sha256sum -c -
+          unzip -tq "$RUNNER_TEMP/PPSA99210.zip"
+          printf 'PS5GBC_LAPY_BASELINE=%s\n' "$RUNNER_TEMP/PPSA99210.zip" >> "$GITHUB_ENV"
+      - name: Native signed PS5 compile and package
+        timeout-minutes: 35
+        run: bash gbc/tools/build.sh
+      - name: Verify install ZIP and produce SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 gbc/tools/verify_package.py
+          cp gbc/build-shelf/GBCXY-v2.0.0-by-YAHBALLON.zip gbc/build-shelf/PPSA99210.zip
+          cd gbc/build-shelf
+          sha256sum PPSA99210.zip > PPSA99210.zip.sha256
+          unzip -tq PPSA99210.zip
+      - name: Upload actual compiled PS5 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: GBCXY-v2.0.0-PPSA99210
+          path: |
+            gbc/build-shelf/PPSA99210.zip
+            gbc/build-shelf/PPSA99210.zip.sha256
+          if-no-files-found: error
+      - name: Publish verified GitHub Release
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="v2.0.0"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Release $tag exists; refusing to silently overwrite it."
+            exit 1
+          fi
+          gh release create "$tag" \
+            gbc/build-shelf/PPSA99210.zip \
+            gbc/build-shelf/PPSA99210.zip.sha256 \
+            --title "GBCXY $tag by YAHBALLON" \
+            --notes-file RELEASE_NOTES.md \
+            --target "$GITHUB_SHA"
