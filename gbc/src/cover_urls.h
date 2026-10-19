@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cctype>
 namespace gbc {
 inline std::string CoverKey(std::string s){
  // (AI-assisted) Common ROM title accents differ from the repository's ASCII names.
@@ -3181,5 +3182,47 @@ inline constexpr CoverEntry cover_names[]={
 {"zokzokheroes","Zok Zok Heroes (2000)(KAZe - Media Factory)(JP).png","GBC"},
 {"zokzokheroes","Zok Zok Heroes (Japan).png","GBC"},
 };
-inline std::vector<std::string> CoverUrls(const fe::GameInfo& g){std::string system=g.file.ends_with(".gb")?"GB":"GBC",stem=g.stem.empty()?g.title:g.stem,key=CoverKey(stem);const CoverEntry* best=nullptr;int score=-1000;for(const auto& e:cover_names){if(key.empty()||key!=e.key)continue;std::string name=e.filename;int rank=system==e.system?100:0;if(name==stem+".png")rank+=1000;for(auto region:{"Germany","Europe","USA","Japan"})if(stem.find(region)!=stem.npos&&name.find(region)!=name.npos)rank+=50;if(name.find("USA")!=name.npos)rank+=10;if(rank>score){score=rank;best=&e;}}if(!best)return {};std::string folder=std::string(best->system)=="GB"?"Nintendo%20-%20Game%20Boy":"Nintendo%20-%20Game%20Boy%20Color";return {"https://thumbnails.libretro.com/"+folder+"/Named_Boxarts/"+CoverEncode(best->filename)};}
+// GB and GBC must never be assigned to the wrong thumbnail directory.
+// Existing local boxart and cached downloads always win in CoverService.
+inline std::vector<std::string> CoverUrls(const fe::GameInfo& g) {
+    std::string path=g.file,stem=g.stem.empty()?g.title:g.stem;
+    std::transform(path.begin(),path.end(),path.begin(),[](unsigned char c){return char(std::tolower(c));});
+    const bool isGB=path.ends_with(".gb");
+    const bool isGBC=path.ends_with(".gbc");
+    const char* systems[2]={"GB","GBC"};
+    std::vector<std::string> urls;
+    auto add=[&](const std::string& name,const std::string& system) {
+        if(name.empty())return;
+        const std::string encoded=CoverEncode(name.ends_with(".png")?name:name+".png");
+        const char* directory=system=="GB"?"Nintendo%20-%20Game%20Boy":"Nintendo%20-%20Game%20Boy%20Color";
+        const std::string prefix="https://thumbnails.libretro.com/"+std::string(directory)+"/Named_Boxarts/";
+        const std::string full=prefix+encoded;
+        if(std::find(urls.begin(),urls.end(),full)==urls.end())urls.push_back(full);
+    };
+    // Prioritize system-correct No-Intro filename matches from the index.
+    const std::string key=CoverKey(stem);
+    for(const char* system:systems) {
+        if((isGB && std::string(system)!="GB")||(isGBC&&std::string(system)!="GBC"))continue;
+        const CoverEntry* best=nullptr;int score=-1000;
+        for(const CoverEntry& e:cover_names) {
+            if(key.empty()||key!=e.key||system!=std::string(e.system))continue;
+            const std::string name=e.filename;
+            int rank=0;
+            if(name==stem+".png")rank+=1000;
+            for(const char* region:{"Germany","Europe","USA","Japan"})
+                if(stem.find(region)!=std::string::npos&&name.find(region)!=std::string::npos)rank+=50;
+            if(name.find("USA")!=std::string::npos)rank+=10;
+            if(rank>score){score=rank;best=&e;}
+        }
+        if(best)add(best->filename,system);
+        // Alternative direct Libretro Named_Boxarts source for unmatched ROMs.
+        // Try common region names, avoiding unrelated GB/GBC directories.
+        add(stem,system);
+        add(g.title,system);
+        add(g.title+" (USA)",system);
+        add(g.title+" (Europe)",system);
+        add(g.title+" (Japan)",system);
+    }
+    return urls;
 }
+} // namespace gbc

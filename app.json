@@ -1,0 +1,13 @@
+{
+  "name": "GBCXY",
+  "version": "2.0.0",
+  "releaseTag": "v2.0.0",
+  "titleId": "PPSA99210",
+  "core": "mGBA 0.10.5 - GB/GBC only",
+  "frontend": "native Porpoise 3D CoverFlow",
+  "compatibility": "PS5GBCX original data paths",
+  "coverSources": [
+    "https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy/Named_Boxarts/",
+    "https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Color/Named_Boxarts/"
+  ]
+}
