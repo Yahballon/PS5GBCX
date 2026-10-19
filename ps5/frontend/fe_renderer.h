@@ -16,6 +16,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
 namespace fe
 {
@@ -25,7 +26,6 @@ struct Texture
 	VkDeviceMemory memory = VK_NULL_HANDLE;
 	VkImageView view = VK_NULL_HANDLE;
 	uint32_t width = 0, height = 0;
-    VkBuffer upload_buffer=VK_NULL_HANDLE;VkDeviceMemory upload_memory=VK_NULL_HANDLE;void* upload_mapped=nullptr;
 };
 
 struct BoxDraw
@@ -64,12 +64,16 @@ struct FrameDesc
 	float glow[4] = {0.5f, 0.4f, 1.0f, 1.0f};
 	float floor_y = -1, reflect_strength = 0.3f, reflect_falloff = 2.0f;
 	BgParams bg = {};
+	VkDescriptorSet backdrop_set = VK_NULL_HANDLE; // selected cover, or fallback
+	// Optional first UI quad can be textured independently from the font atlas.
+	// Used by the active GBA framebuffer (and the splash logo).
+	VkDescriptorSet game_set = VK_NULL_HANDLE;
+	uint32_t game_vertices = 0;
 	std::vector<BoxDraw> reflections;
 	std::vector<BoxDraw> boxes;
 	HaloDraw halo;
 	std::vector<UiVertex> ui;
 	float fade = 1.0f;
-    VkDescriptorSet game_set=VK_NULL_HANDLE;uint32_t game_vertices=0;
 };
 
 class Renderer
@@ -81,10 +85,16 @@ public:
 		uint32_t width, uint32_t height, VkFormat out_format, const std::vector<VkImage>& out_images,
 		VkImageLayout out_final_layout);
 	void Shutdown();
+	VkRenderPass ExactFinalPass() const { return m_final_pass; }
+	void SetExactCallbacks(std::function<void(unsigned,float,float)> prepare,
+		std::function<void(VkCommandBuffer)> upload, std::function<void(VkCommandBuffer)> draw)
+	{
+		m_exact_prepare=std::move(prepare);m_exact_upload=std::move(upload);m_exact_draw=std::move(draw);
+	}
+	void ExactEnabled(bool active) { m_exact_enabled=active; }
 
 	// An RGBA8 (4 bytes a pixel) or R8 texture; the upload happens with the next frame.
 	Texture* CreateTexture(uint32_t w, uint32_t h, VkFormat format, const void* pixels);
-	bool UpdateTexture(Texture* t, VkFormat format, const void* pixels);
 	void DestroyTexture(Texture* t); // freed once the GPU is done with it
 
 	VkDescriptorSet AllocTextureSet(Texture* t0, Texture* t1, Texture* t2);
@@ -122,7 +132,6 @@ private:
 	{
 		Texture* texture;
 		Buffer staging;
-        bool reused=false;
 	};
 	struct Slot
 	{
@@ -190,7 +199,11 @@ private:
 
 	Texture* m_white = nullptr;
 	Texture* m_atlas = nullptr;
+	std::function<void(unsigned,float,float)> m_exact_prepare;
+	std::function<void(VkCommandBuffer)> m_exact_upload,m_exact_draw;
+	bool m_exact_enabled=false;
 	VkDescriptorSet m_post_set = VK_NULL_HANDLE;
+	VkDescriptorSet m_bg_fallback_set = VK_NULL_HANDLE;
 	VkDescriptorSet m_atlas_set = VK_NULL_HANDLE;
 
 	VkCommandPool m_cmd_pool = VK_NULL_HANDLE;

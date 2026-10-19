@@ -158,7 +158,6 @@ bool Renderer::CreateImage(uint32_t w, uint32_t h, VkFormat format, VkImageUsage
 
 void Renderer::DestroyImage(Texture& t)
 {
-    if(t.upload_buffer){Buffer b{t.upload_buffer,t.upload_memory,t.upload_mapped,VkDeviceSize(t.width)*t.height*4};DestroyBuffer(b);t.upload_buffer=VK_NULL_HANDLE;t.upload_memory=VK_NULL_HANDLE;t.upload_mapped=nullptr;}
 	if (t.view)
 		m_vk->vkDestroyImageView(m_dev, t.view, nullptr);
 	if (t.image)
@@ -714,7 +713,8 @@ bool Renderer::Init(Vk* vk, VkPhysicalDevice physical_device, VkDevice device, u
 	if (!m_white)
 		return false;
 	m_post_set = AllocTextureSet(&m_scene, m_white, m_white);
-	return m_post_set != VK_NULL_HANDLE;
+	m_bg_fallback_set = AllocTextureSet(m_white, m_white, m_white);
+	return m_post_set != VK_NULL_HANDLE && m_bg_fallback_set != VK_NULL_HANDLE;
 }
 
 Texture* Renderer::CreateTexture(uint32_t w, uint32_t h, VkFormat format, const void* pixels)
@@ -741,12 +741,6 @@ Texture* Renderer::CreateTexture(uint32_t w, uint32_t h, VkFormat format, const 
 	return t;
 }
 
-// (AI-assisted) Reuse the GB/GBC image; staging retires behind the existing frame fence.
-bool Renderer::UpdateTexture(Texture* t,VkFormat format,const void* pixels){
- if(!t||!pixels||format!=VK_FORMAT_R8G8B8A8_UNORM)return false;const VkDeviceSize bytes=VkDeviceSize(t->width)*t->height*4;
- if(!t->upload_buffer){Buffer b;if(!CreateBuffer(bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,b))return false;t->upload_buffer=b.buffer;t->upload_memory=b.memory;t->upload_mapped=b.mapped;}
- Upload up{t,{t->upload_buffer,t->upload_memory,t->upload_mapped,bytes},true};std::memcpy(up.staging.mapped,pixels,size_t(bytes));m_pending.push_back(up);return true;
-}
 void Renderer::DestroyTexture(Texture* t)
 {
 	if (!t)
@@ -755,7 +749,7 @@ void Renderer::DestroyTexture(Texture* t)
 	for (size_t i = 0; i < m_pending.size(); i++)
 		if (m_pending[i].texture == t)
 		{
-			if(!m_pending[i].reused)DestroyBuffer(m_pending[i].staging);
+			DestroyBuffer(m_pending[i].staging);
 			m_pending.erase(m_pending.begin() + static_cast<long>(i));
 			break;
 		}
@@ -891,12 +885,17 @@ bool Renderer::Render(const FrameDesc& f, uint32_t out_index, VkSemaphore wait, 
 	if (r != VK_SUCCESS)
 		return Fail("vkBeginCommandBuffer", r);
 	VkCommandBuffer cmd = s.cmd;
+	if (m_exact_enabled && m_exact_prepare)
+	{
+		m_exact_prepare(static_cast<unsigned>(m_slot),float(m_width),float(m_height));
+		if (m_exact_upload) m_exact_upload(cmd);
+	}
 
 	// Texture uploads.
 	for (Upload& up : m_pending)
 	{
-		Barrier(cmd, up.texture->image, VK_IMAGE_ASPECT_COLOR_BIT, up.reused?VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:VK_IMAGE_LAYOUT_UNDEFINED,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, up.reused?VK_ACCESS_SHADER_READ_BIT:0, VK_ACCESS_TRANSFER_WRITE_BIT, up.reused?VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT:VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		Barrier(cmd, up.texture->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT);
 		VkBufferImageCopy c = {};
 		c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -905,7 +904,7 @@ bool Renderer::Render(const FrameDesc& f, uint32_t out_index, VkSemaphore wait, 
 		Barrier(cmd, up.texture->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-		if(!up.reused)s.dead_buffers.push_back(up.staging);
+		s.dead_buffers.push_back(up.staging);
 	}
 	m_pending.clear();
 
@@ -931,7 +930,8 @@ bool Renderer::Render(const FrameDesc& f, uint32_t out_index, VkSemaphore wait, 
 		m_vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &s.frame_set, 0, nullptr);
 
 		m_vk->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bg);
-		m_vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, 1, &m_post_set, 0, nullptr);
+		const VkDescriptorSet background_set = f.backdrop_set ? f.backdrop_set : m_bg_fallback_set;
+		m_vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, 1, &background_set, 0, nullptr);
 		m_vk->vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
 			sizeof(BgParams), &f.bg);
 		m_vk->vkCmdBindVertexBuffers(cmd, 0, 1, &m_quad_vb.buffer, &zero);
@@ -1004,17 +1004,35 @@ bool Renderer::Render(const FrameDesc& f, uint32_t out_index, VkSemaphore wait, 
 			sizeof(post), post);
 		m_vk->vkCmdBindVertexBuffers(cmd, 0, 1, &m_quad_vb.buffer, &zero);
 		m_vk->vkCmdDraw(cmd, 3, 1, 0, 0);
-		if (!f.ui.empty() && m_atlas_set)
+		// Original Porpoise blue-glass library is the complete background.
+		// Draw the native Settings sheet *after* it (not the old black shelf).
+		// Rebind GBCXY's own pipeline, descriptors and vertex buffer after
+		// Porpoise changed the Vulkan graphics state.
+		if (m_exact_enabled && m_exact_draw) m_exact_draw(cmd);
+		if (!f.ui.empty() && (m_atlas_set || f.game_set))
 		{
 			m_vk->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ui);
-			m_vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, 1, &m_atlas_set, 0, nullptr);
+			// Porpoise changes pipeline state; always restore the native
+			// pipeline, uniform set, UI shader constants and UI vertex buffer.
+			m_vk->vkCmdPushConstants(cmd, m_layout,
+				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+				0, sizeof(post), post);
+			m_vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &s.frame_set, 0, nullptr);
 			m_vk->vkCmdBindVertexBuffers(cmd, 0, 1, &s.ui.buffer, &zero);
-			if(f.game_set&&f.game_vertices){
-                m_vk->vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_layout,1,1,&f.game_set,0,nullptr);
-                m_vk->vkCmdDraw(cmd,f.game_vertices,1,0,0);
-                m_vk->vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,m_layout,1,1,&m_atlas_set,0,nullptr);
-            }
-            if(f.ui.size()>f.game_vertices)m_vk->vkCmdDraw(cmd,uint32_t(f.ui.size())-f.game_vertices,1,f.game_vertices,0);
+			// The first six vertices display the full-screen game texture.
+			// Later vertices (FPS text or settings) use the signed-distance font.
+			const uint32_t game_count=f.game_set
+				? std::min(static_cast<uint32_t>(f.ui.size()),f.game_vertices) : 0;
+			if (game_count>0)
+			{
+				m_vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, 1, &f.game_set, 0, nullptr);
+				m_vk->vkCmdDraw(cmd,game_count,1,0,0);
+			}
+			if (m_atlas_set && f.ui.size()>game_count)
+			{
+				m_vk->vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, 1, &m_atlas_set, 0, nullptr);
+				m_vk->vkCmdDraw(cmd,static_cast<uint32_t>(f.ui.size())-game_count,1,game_count,0);
+			}
 		}
 		m_vk->vkCmdEndRenderPass(cmd);
 	}
@@ -1088,7 +1106,7 @@ void Renderer::Shutdown()
 	// them (the shelf destroys its own first; m_white goes below). vk-285-40..46 freed them here as
 	// well, so a frontend that stopped before its first frame freed m_white twice.
 	for (Upload& up : m_pending)
-		if(!up.reused)DestroyBuffer(up.staging);
+		DestroyBuffer(up.staging);
 	m_pending.clear();
 	for (Slot& s : m_slots)
 	{
