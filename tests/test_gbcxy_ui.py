@@ -11,8 +11,9 @@ for theme in ('chromatic-shift','pocket-forest','berry-soda','polar-lcd','retro-
     assert theme in front and theme in opts,theme
 assert 'GBCXY' in front and 'gbcxy_build::kVersion' in front
 urls=(root/'gbc/src/cover_urls.h').read_text()
-assert 'Nintendo%20-%20Game%20Boy/Named_Boxarts/' in urls
-assert 'Nintendo%20-%20Game%20Boy%20Color/Named_Boxarts/' in urls
+assert '"Nintendo%20-%20Game%20Boy"' in urls
+assert '"Nintendo%20-%20Game%20Boy%20Color"' in urls
+assert '"/Named_Boxarts/"' in urls
 assert 'path.ends_with(".gb")' in urls and 'path.ends_with(".gbc")' in urls
 assert 'system!=std::string(e.system)' in urls
 frame=(root/'gbc/src/shelf_runtime.cpp').read_text()
