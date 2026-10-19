@@ -12,7 +12,7 @@ import subprocess
 root=Path(__file__).resolve().parents[2]
 vulkan=Path(os.environ["PS5_VULKAN_DIR"])
 sdk=Path(os.environ["PS5_PAYLOAD_SDK"])
-out=root/"gba/build-shelf/ps5-core/agc-imports"
+out=root/"gbc/build-shelf/ps5-core/agc-imports"
 
 def execute(*args):
     print("+"," ".join(map(str,args)),flush=True)

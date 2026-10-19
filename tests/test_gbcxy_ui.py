@@ -24,4 +24,8 @@ assert 'gbcxy_exit_to_shell(' in ps5 and 'sceSystemServiceLoadExec("exit",nullpt
 assert '::exit(0)' not in ps5 and 'return 0;' not in main
 assert (root/'ps5/porpoise_original/src/ui_gfx.cpp').is_file()
 assert 'CHROMATIC POCKET' in (root/'gbc/src/loading.cpp').read_text()
-print("PASS: GBCXY themes, correct GB/GBC cover sources, GB core and native exit")
+for helper in ('build_generated_psbc.py','build_agc_imports.py'):
+    helper_text=(root/'gbc/tools'/helper).read_text()
+    assert '"gba/build-shelf' not in helper_text,helper
+    assert '"gbc/build-shelf' in helper_text,helper
+print("PASS: GBCXY themes, correct GB/GBC covers, GB core, SDK archives and native exit")

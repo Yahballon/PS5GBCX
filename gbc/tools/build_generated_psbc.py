@@ -17,7 +17,7 @@ sdk=Path(os.environ["PS5_PAYLOAD_SDK"])
 work=vulkan/".deps/work/psbc-ps5"
 tree=work/"third_party/opengnm-psbc"
 driver=vulkan/"build/driver/ps5/libpsbc_driver.ps5.a"
-out=root/"gba/build-shelf/ps5-core/generated-psbc.ps5.a"
+out=root/"gbc/build-shelf/ps5-core/generated-psbc.ps5.a"
 sources=[
   "src/amd/compiler/aco_opcodes.cpp",
   "src/compiler/nir/nir_constant_expressions.c",
