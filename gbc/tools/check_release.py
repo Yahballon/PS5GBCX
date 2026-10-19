@@ -10,8 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def check_source():
+    # The release is assembled from committed source only. Generated SDK
+    # tarballs, compiled objects and downloaded dependencies are untracked:
+    # checking them here would cause false 100-MB source-limit failures.
     result = subprocess.run(
-        ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+        ['git', 'ls-files', '--cached', '-z'],
         cwd=ROOT, check=True, capture_output=True,
     )
     errors = []

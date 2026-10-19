@@ -28,6 +28,9 @@ for helper in ('build_generated_psbc.py','build_agc_imports.py'):
     helper_text=(root/'gbc/tools'/helper).read_text()
     assert '"gba/build-shelf' not in helper_text,helper
     assert '"gbc/build-shelf' in helper_text,helper
+hygiene=(root/'gbc/tools/check_release.py').read_text()
+assert "['git', 'ls-files', '--cached', '-z']" in hygiene
+assert "'--others'" not in hygiene
 verify=(root/'gbc/tools/verify_package.py').read_text()
 assert 'root / "gba/build-shelf' not in verify
 assert 'root / "gbc" / "build-shelf"' in verify
