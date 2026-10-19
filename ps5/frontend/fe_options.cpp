@@ -241,7 +241,7 @@ std::string CardSize(uint64_t bytes)
 
 // The settings page's GROUPS (assets/web/index.html), in its order, with its labels, defaults and hints. The text field
 // (PS5SX2/TexturesDir) stays on the page: the console has no keyboard for a path.
-// (AI-assisted) The settings choices use the same schema as the GB/GBC input runtime.
+// (AI-assisted) The settings choices use the same schema as the GBA input runtime.
 static std::vector<OptionChoice> NesButtonChoices()
 {
     std::vector<OptionChoice> choices;
@@ -273,9 +273,14 @@ static std::vector<OptionDef> NesShortcutRows(int action)
 }
 const std::vector<OptionGroup>& OptionGroups()
 {
-    // (AI-assisted) GB/GBC values in the unchanged original options-sheet layout.
+    // (AI-assisted) GBA values in the unchanged original options-sheet layout.
     static const std::vector<OptionGroup> groups = {
         {"Library", {Seg("GBC/LibraryOrder","Library order (restart)","Name","",{{"Name","Name"},{"Recent","Recent games first"}})},kTabSettings},
+        {"Appearance", {Seg("GBCXY/Theme", "Theme", "chromatic-shift", "",
+           {{"chromatic-shift","Chromatic Shift"},{"pocket-forest","Pocket Forest"},
+            {"berry-soda","Berry Soda"},{"polar-lcd","Polar LCD"},
+            {"retro-amber","Retro Amber"}},
+           "Five exclusive GBCXY themes. Saved for the complete library.")}, kTabSettings},
         {"Graphics", {
           Seg("GBC/Resolution","Output resolution (restart)","4K","",{{"Auto","Auto"},{"1080p","1080p"},{"4K","4K"}}),
           Seg("GBC/Graphics","Graphics mode","Enhanced","",{{"Original","ORIGINAL"},{"Smooth","4K HD SMOOTH"},{"Enhanced","4K ENHANCED"}}),
@@ -404,6 +409,13 @@ void OptionsSheet::BuildRows()
 
 OptionsSheet::Effective OptionsSheet::Get(const std::string& key, const std::string& def) const
 {
+    if (key=="GBCXY/Theme") {
+        const IniState& global=m_global?m_own:m_globals;
+        if(const std::string* value=Find(global,key))
+            return {*value,m_global?From::Own:From::Global};
+        return {def,From::Default};
+    }
+
 	if (const std::string* v = Find(m_own, key))
 		return {*v, From::Own};
 	if (!m_global)
@@ -505,9 +517,9 @@ std::string OptionsSheet::Help(const Row& r) const
     if(r.kind==Kind::RescanLibrary)return "Refresh the cached library after adding or removing games. Restart the app after requesting a rescan.";
 	if (r.kind == Kind::NfsUrl)
 		return "Press Cross to enter nfs://server/export/folder with the controller keyboard. "
-			   "GB/GBC games are loaded from this folder after restarting PS5GBC. Changes apply to all games. "
+			   "GB / GBC games are loaded from this folder after restarting PS5GBC. Changes apply to all games. "
 			   "Clear the field and save to remove this share. Other configured shares stay.";
-	const std::string follows = m_global ? "GB/GBC default" : "the setting for all games";
+	const std::string follows = m_global ? "GBC default" : "the setting for all games";
 	switch (r.kind)
 	{
 		case Kind::Option:
@@ -522,7 +534,7 @@ std::string OptionsSheet::Help(const Row& r) const
 			else if (r.def->key.compare(0, 7, "PS5SX2/") == 0) // vk-285-116: PS5SX2's own options have PS5SX2's defaults
 				from = "The default.";
 			else
-				from = "GB/GBC default.";
+				from = "GBC default.";
 			if (r.def->restart)
 				from += " Used when a game starts.";
 			return h.empty() ? from : h + " " + from;
@@ -579,7 +591,7 @@ std::string OptionsSheet::Help(const Row& r) const
 				return m_global ? "Every control on this tab goes back to its default: each button presses its own, the sticks as they are, "
 				                  "L3+R3 + D-pad up or down to save or load."
 				                : "This game's controls go back to following the controls for all games.";
-			return m_global ? "Every option on this tab goes back to GB/GBC default. Lines of gs.ini this sheet doesn't show stay."
+			return m_global ? "Every option on this tab goes back to GBC default. Lines of gs.ini this sheet doesn't show stay."
 			                : "This game's options go back to following the settings for all games. Its patches, memory cards and controls "
 			                  "stay.";
 		default:
@@ -590,7 +602,9 @@ std::string OptionsSheet::Help(const Row& r) const
 bool OptionsSheet::Save(const std::vector<Change>& changes, const std::string& note)
 {
 	std::string what, error;
-	if (!EditSettingsFile(m_path, m_global ? m_header : m_header + ": written from the PS5SX2 shelf", changes, what, error))
+    const bool theme_only=changes.size()==1&&changes.front().key=="GBCXY/Theme";
+    const std::string& destination=theme_only?m_paths.gs_ini:m_path;
+	if (!EditSettingsFile(destination, theme_only ? "# GBCXY theme" : (m_global ? m_header : m_header + ": written from GBCXY"), changes, what, error))
 	{
 		m_status = "Couldn't save: " + error;
 		std::printf("[options] %s: %s\n", m_file_label.c_str(), m_status.c_str());
@@ -713,7 +727,7 @@ bool OptionsSheet::Activate(const Row& r, double now)
 {
     if(r.kind==Kind::RescanLibrary){
         std::string error;bool okay=m_paths.rescan_library&&m_paths.rescan_library(error);
-        m_status=okay?"Rescan requested. Restart PS5GBC.":error;
+        m_status=okay?"Rescan requested. Restart GBCXY.":error;
         return okay;
     }
 	const int index = static_cast<int>(&r - m_rows.data());
